@@ -2,10 +2,10 @@
 
 # Copyright 2013 David Sanders
 
-"""Script for packaging up required shared libraries into a ZIP for offsite core
-dump analysis
+"""Script for packaging up required shared libraries into a tarball for offsite
+core dump analysis
 
-The produced ZIP file maintains the directory structure of the shared libraries
+The produced tarball maintains the directory structure of the shared libraries
 used by the core dump, as seen from the root directory.
 
 When using GDB to analyze the core dump, use the following commands:
@@ -21,7 +21,7 @@ API, and Python 2.5 and above
 """
 
 import textwrap
-import zipfile
+import tarfile
 import subprocess
 import platform
 import sys
@@ -98,18 +98,40 @@ def get_coredump_shared_libraries(core_filename):
 
     return shared_libraries
 
-def zip_coredump_shared_libraries(core_filename, zip_filename):
-    """ZIPs the shared libraries found in the core dump and the process binary"""
+def tar_coredump_shared_libraries(core_filename, tar_filename):
+    """Creates a tarball of the shared libraries found in the core dump, as well
+    as the process binary
+    
+    """
 
     shared_libraries = get_coredump_shared_libraries(core_filename)
 
-    output_zip = zipfile.ZipFile(zip_filename, "w")
+    tarball = tarfile.open(tar_filename, "w:gz")
 
     for lib in shared_libraries:
-        # The zipfile automatically collapses symlinks for us
-        output_zip.write(lib, arcname=lib)
+        if os.path.islink(lib):
+            real_path = os.path.realpath(lib)
+            previous_symlink = lib
+            symlink = lib
 
-    output_zip.close()
+            # Walk the symlinks, adding each to the tarball
+            # until we reach a real file
+            while symlink != real_path:
+                tarball.add(symlink, arcname=symlink)
+
+                previous_symlink = symlink
+                symlink = os.readlink(previous_symlink)
+                
+                # os.readlink might return a relative path
+                if not os.path.exists(symlink):
+                    symlink = os.path.join(os.path.dirname(previous_symlink),
+                                           symlink)
+
+            tarball.add(real_path, arcname=real_path)
+        else:
+            tarball.add(lib, arcname=lib)
+
+    tarball.close()
 
 if __name__ == '__main__':
     usage_str = """\
@@ -119,9 +141,8 @@ if __name__ == '__main__':
     
     parser = OptionParser(usage=textwrap.dedent(usage_str),
                           version="%prog 0.1")
-    parser.add_option("--list",
-                      action="store_true", dest="list_files", default=False,
-                      help="list the files and exit")
+    parser.add_option("--list", help="list the files and exit",
+                      action="store_true", dest="list_files", default=False)
 
     (options, args) = parser.parse_args()
 
@@ -147,9 +168,9 @@ if __name__ == '__main__':
             sys.stderr.write("{0}: No such file\n".format(core_filename))
             exit(1)
 
-        if not output_filename.endswith(".zip"):
-            err_msg = ("WARNING: Output file will be a ZIP, but filename "
-                       "doesn't end in .zip\n")
+        if not output_filename.endswith(".tar.gz"):
+            err_msg = ("WARNING: Output file will be a gzipped tarball, "
+                       "but filename doesn't end in .tar.gz\n")
             sys.stderr.write(err_msg)
 
-        zip_coredump_shared_libraries(core_filename, output_filename)
+        tar_coredump_shared_libraries(core_filename, output_filename)
